@@ -1,2 +1,19 @@
-@import 'tailwindcss' source(none);
-@source '../**/*.{js,ts,jsx,tsx}';
+@import "tailwindcss";
+
+/* PURPLE ӨНГИЙГ АЖИЛЛУУЛАХ ТАЙЛБАР */
+@theme {
+  /* page.js дээрх bg-purple-600, border-purple-100 гэх мэт ангиуд */
+  /* v4 дээр автоматаар орж ирдэг. Хэрэв ажиллахгүй бол */
+  /* та энд гараар тодорхойлж болно (жишээ нь): */
+  --color-purple-600: #7c3aed;
+  --color-purple-50: #faf5ff;
+  --color-purple-100: #f3e8ff;
+  
+  /* Бусад жижиг тохиргоо */
+  --font-sans: "Inter", ui-sans-serif, system-ui;
+}
+/* frontend/app/tailwind.css */
+.prose strong {
+    color: #7e22ce; /* Purple-700 өнгөөр bold текстийг тодотгох */
+    font-weight: 700;
+  }

@@ -4,7 +4,8 @@ import asyncio
 import sys
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-import google.generativeai as genai  # Илүү тогтвортой сан
+from google import genai
+from google.genai import types as genai_types
 from pinecone import Pinecone
 from dotenv import load_dotenv
 
@@ -32,8 +33,8 @@ app.add_middleware(
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
-# Gemini тохиргоо
-genai.configure(api_key=GOOGLE_API_KEY)
+# Gemini клиент (generate_content_stream, embed_content)
+gemini_client = genai.Client(api_key=GOOGLE_API_KEY)
 
 # Pinecone тохиргоо
 pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -61,12 +62,38 @@ async def websocket_endpoint(websocket: WebSocket):
             context_text = ""
             try:
                 # Embedding үүсгэх
-                embed_res = genai.embed_content(
-                    model="models/embedding-001",
-                    content=query,
-                    task_type="retrieval_query"
-                )
-                query_vector = embed_res['embedding']
+                # IMPORTANT:
+                # Your Gemini API setup may not support `models/embedding-001` for `embedContent`.
+                # Use the same embedding model as `ingest.py` to keep vector dimensions consistent.
+                embed_model_candidates = [
+                    "models/gemini-embedding-001",
+                    "models/embedding-001",  # fallback for older/alternate configs
+                ]
+                embed_res = None
+                last_embed_err = None
+                for embed_model in embed_model_candidates:
+                    try:
+                        embed_res = gemini_client.models.embed_content(
+                            model=embed_model,
+                            contents=query,
+                            config=genai_types.EmbedContentConfig(
+                                task_type="RETRIEVAL_QUERY",
+                            ),
+                        )
+                        break
+                    except Exception as e:
+                        # If the API key is invalid/rejected, fallbacks will just hide the real root cause.
+                        msg = str(e).lower()
+                        if "403" in msg or "leaked" in msg:
+                            raise
+                        last_embed_err = e
+
+                if embed_res is None:
+                    raise RuntimeError(
+                        f"Embedding failed for all candidate models. Last error: {last_embed_err}"
+                    )
+
+                query_vector = embed_res.embeddings[0].values
                 
                 # Pinecone-оос хайх
                 search_results = index.query(vector=query_vector, top_k=3, include_metadata=True)
@@ -81,18 +108,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 print(f"Retrieval алдаа: {e}")
                 context_text = "Мэдээллийн сантай холбогдоход алдаа гарлаа."
 
-            # 3. Ухаалаг Prompt болон Gemini Generation
-            # ЧУХАЛ: Заавал gemini-1.5-flash эсвэл gemini-2.0-flash-exp ашиглана
-            model = genai.GenerativeModel("gemini-2.5-flash")
-            
+            # 3. Ухаалаг Prompt болон Gemini Generation (generate_content_stream)
             prompt = (
-                f"Чи бол Central Test компанийн албан ёсны зөвлөх AI туслах байна.\n\n"
+                f"Чи бол Central Test компанийн албан ёсны AI зөвлөх байна.\n\n"
                 f"ЗОРИЛГО:\n"
                 f"Хүний нөөцийн менежерүүдэд зориулсан академик түвшний, мэргэжлийн хариулт өгөх.\n\n"
                 f"ДҮРЭМ:\n"
-                f"3. Хариултыг эхлээд ТОВЧ, дараа нь ДЭЛГЭРЭНГҮЙ тайлбарлан бич.\n"
-                f"4. Психометрик болон Хүний нөөцийн нэр томьёог зөв ашигла.\n"
+                f"3. Хариултыг ДЭЛГЭРЭНГҮЙ тайлбарлан бич.'Одоор тэмдэглэсэн' гарчиг, тэмдэглэгээг ТЕКСТЭНД ХЭЗЭЭ Ч БИТГИ АШИГЛА.\n"
+                f"4. Сэтгэл зүйн шинжлэх ухааны болон Хүний нөөцийн нэр томьёог зөв ашигла.\n"
                 f"5. Найруулга зүй болон зөв бичгийн дүрмийн алдаагүй байх.\n\n"
+                f"6. Хариултын хамгийн чухал нэр томьёо, түлхүүр өгүүлбэрүүдийг заавал **Bold** болгож бич"
                 f"CONTEXT (Мэдээллийн сан):\n{context_text}\n\n"
                 f"ХЭРЭГЛЭГЧИЙН АСУУЛТ: {query}\n\n"
                 f"ХАРИУЛТ:"
@@ -100,9 +125,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
             print("Gemini хариулж байна...")
             try:
-                # Streaming ашиглан хариулт илгээх
-                response = model.generate_content(prompt, stream=True)
-                
+                response = gemini_client.models.generate_content_stream(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                )
                 for chunk in response:
                     if chunk.text:
                         await websocket.send_text(json.dumps({
@@ -128,4 +154,4 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
